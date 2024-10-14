@@ -1,85 +1,114 @@
+// Listen for new connections
+// Listen for disconnections
+
+// Send jobs to available connections
+
+// Future -> start NATS Server
+
+// CID -> Unique ID for workers
+
+/*
+Server SUBJ -> worker.<cid>.job
+Server SUBJ -> worker.<cid>.job.<jid>
+*/
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"log"
-	"os"
-	"os/signal"
+	"net/http"
 	"sync"
-	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 
-	"github.com/wcrum/watcher/collections/job"
+	"github.com/wcrum/is-it-down-v2/collections/job"
 )
 
-func main() {
-	id := uuid.New()
-	name := id.String()
+var (
+	InvalidJob = fmt.Errorf("Invalid Job.")
+)
 
-	fmt.Printf("Starting worker %s\n", name)
+type Worker struct {
+	mu sync.RWMutex
 
-	var wg sync.WaitGroup
-	wg.Add(1) // Increment WaitGroup counter
-	// Connect to NATS server.
-	nc, err := nats.Connect("nats://localhost:4222")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer nc.Close()
+	nc *nats.Conn
+}
 
-	nc.Publish("worker.connect", []byte(name))
-
-	// Subscribe to a subject.
-
-	jobSubscription := fmt.Sprintf("worker.%s.job", name)
-	fmt.Println(jobSubscription)
-	sub, err := nc.SubscribeSync(jobSubscription)
-	if err != nil {
-		log.Fatal(err)
+func (w *Worker) CheckLatency(args []string) (time.Duration, error) {
+	fmt.Println("")
+	if !(len(args) >= 1) {
+		return 0, InvalidJob
 	}
 
-	sigchan := make(chan os.Signal, 1)
-	signal.Notify(sigchan,
-		syscall.SIGTERM,
-		syscall.SIGINT,
-		syscall.SIGQUIT)
-	go func() {
-		defer wg.Done() // Decrement counter when goroutine exits
-		s := <-sigchan
-		fmt.Println(s)
-		err := nc.Publish("worker.disconnect", []byte(name))
-		if err != nil {
-			fmt.Println("Error publishing message:", err)
-		}
-		time.Sleep(1 * time.Second)
-		os.Exit(1)
-	}()
+	start := time.Now()
+
+	url := args[0]
+
+	// task
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer resp.Body.Close()
+
+	latency := time.Since(start)
+
+	fmt.Println(latency)
+
+	return latency, nil
+}
+
+func (w *Worker) CheckOnline() {
+	sub, err := w.nc.SubscribeSync("workers.online")
+	if err != nil {
+
+	}
 
 	for {
-		msg, err := sub.NextMsg(time.Second)
+		msg, err := sub.NextMsg(10 * time.Second)
 		if err != nil {
-			if err == nats.ErrTimeout {
-				// No message received within the timeout period
-				continue
-			}
-			log.Fatal(err)
 		}
 
-		// Print the received message.
-		go func() {
-			job := job.Job{}
-			err := json.Unmarshal(msg.Data, &job)
+		me, err := w.nc.GetClientID()
+		if err != nil {
+		}
 
-			fmt.Println(err)
-			fmt.Printf("Received message: %s\n", job)
-			time.Sleep(1 * time.Second)
-			fmt.Println("Finished workload.")
-		}()
+		clientID := fmt.Sprintf("%d", me)
 
-		// Process the message...
+		msg.Respond([]byte(clientID))
 	}
+}
+
+func main() {
+	var err error
+
+	NATS_SERVER := "localhost:4222"
+
+	worker := Worker{}
+	worker.nc, err = nats.Connect(NATS_SERVER)
+	if err != nil {
+		return
+	}
+
+	go worker.CheckOnline()
+
+	go func() {
+		worker.nc.QueueSubscribe("jobs", "workers", func(msg *nats.Msg) {
+			task := job.Job{}
+
+			if err := task.Decode(msg.Data); err != nil {
+				return
+			}
+
+			fmt.Println(task)
+			// handle job
+			switch task.Command {
+			case "check-latency":
+				go worker.CheckLatency(task.Args)
+			}
+
+		})
+	}()
+
+	select {}
 }

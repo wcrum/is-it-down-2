@@ -1,21 +1,31 @@
 package job
 
 import (
-	"encoding/json"
-
 	"github.com/google/uuid"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 type Job struct {
-	Id      uuid.UUID `json:"id"`
-	Command string    `json:"command"`
-	Args    []string  `json:"args"`
+	Id      uuid.UUID `bson:"id"`
+	Status  string    `bson:"status"`
+	Command string    `bson:"command"`
+	Args    []string  `bson:"args"`
+
+	Response string `bson:"response"`
 }
 
-func (j *Job) Bytes() ([]byte, error) {
-	jsonData, err := json.Marshal(j)
+func (j *Job) Encode() ([]byte, error) {
+	bsonData, err := bson.Marshal(j)
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
-	return jsonData, nil
+	return bsonData, nil
+}
+
+func (j *Job) Decode(data []byte) error {
+	err := bson.Unmarshal(data, j)
+	if err != nil {
+		return err
+	}
+	return nil
 }
