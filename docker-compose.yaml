@@ -2,7 +2,6 @@
 version: '3.1'
 
 services:
-
   mongo:
     image: mongo
     restart: always
@@ -21,4 +20,10 @@ services:
       ME_CONFIG_MONGODB_ADMINPASSWORD: example
       ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
       ME_CONFIG_BASICAUTH: false
-
+  nats:
+    image: nats
+    restart: always
+    ports:
+      - 4222:4222
+      - 8222:8222
+    command: --http_port 8222

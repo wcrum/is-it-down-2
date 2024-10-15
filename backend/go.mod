@@ -1,4 +1,4 @@
-module github.com/wcrum/is-it-down-2/backend
+module github.com/wcrum/is-it-down-v2/backend
 
 go 1.23.2
 

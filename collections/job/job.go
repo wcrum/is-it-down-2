@@ -1,6 +1,8 @@
 package job
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -11,7 +13,9 @@ type Job struct {
 	Command string    `bson:"command"`
 	Args    []string  `bson:"args"`
 
-	Response string `bson:"response"`
+	Response    string    `bson:"response"`
+	CompletedAt time.Time `bson:"CompletedAt"`
+	RecievedAt  time.Time `bson:"RecievedAt"`
 }
 
 func (j *Job) Encode() ([]byte, error) {

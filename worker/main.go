@@ -34,15 +34,15 @@ type Worker struct {
 	nc *nats.Conn
 }
 
-func (w *Worker) CheckLatency(args []string) (time.Duration, error) {
+func (w *Worker) CheckLatency(job job.Job) (time.Duration, error) {
 	fmt.Println("")
-	if !(len(args) >= 1) {
+	if !(len(job.Args) >= 1) {
 		return 0, InvalidJob
 	}
 
 	start := time.Now()
 
-	url := args[0]
+	url := job.Args[0]
 
 	// task
 	resp, err := http.Get(url)
@@ -53,7 +53,12 @@ func (w *Worker) CheckLatency(args []string) (time.Duration, error) {
 
 	latency := time.Since(start)
 
-	fmt.Println(latency)
+	job.CompletedAt = time.Now().UTC()
+	job.Response = latency.String()
+
+	b, err := job.Encode()
+
+	w.nc.Publish("jobs.complete", b)
 
 	return latency, nil
 }
@@ -104,7 +109,8 @@ func main() {
 			// handle job
 			switch task.Command {
 			case "check-latency":
-				go worker.CheckLatency(task.Args)
+				task.RecievedAt = time.Now().UTC()
+				go worker.CheckLatency(task)
 			}
 
 		})

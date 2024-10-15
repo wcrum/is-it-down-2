@@ -1,16 +1,18 @@
-// Listen for new connections
-// Listen for disconnections
-//     this was handled by the request reply
+/*
+todo:
+- better logging
+- main thread starts NATS
+	need to ensure controller <> nats
 
-// Send jobs to available connections
 
-// Future -> start NATS Server
-
-// CID -> Unique ID for workers
+notes:
+CID -> Unique ID for workers
+*/
 
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -20,6 +22,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/wcrum/is-it-down-v2/collections/job"
 )
@@ -29,10 +33,14 @@ type Server struct {
 
 	nc *nats.Conn
 
+	mg *mongo.Client
+	db *mongo.Database
+
 	WorkersAvailable bool
 }
 
 func (s *Server) RunWebServer() {
+
 	http.HandleFunc("GET /test", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "asd")
 	})
@@ -41,20 +49,6 @@ func (s *Server) RunWebServer() {
 	http.ListenAndServe(":8080", nil)
 }
 
-/*
-google.com
-	| status
-	| latency
-	| last_checked
-	| history {
-		- time:
-		- time:
-		- time:
-		- time:
-		- time:
-	}
-*/
-
 func (s *Server) SendJobs() {
 	for {
 		if !s.WorkersAvailable {
@@ -62,6 +56,8 @@ func (s *Server) SendJobs() {
 			time.Sleep(10 * time.Second)
 			continue
 		}
+
+		// temporary, need to collect websites from user / standard list
 		websites := []string{
 			"https://www.google.com",
 			"https://www.youtube.com",
@@ -90,7 +86,17 @@ func (s *Server) SendJobs() {
 
 func (s *Server) CollectJobs() {
 	s.nc.Subscribe("jobs.complete", func(msg *nats.Msg) {
+		job := job.Job{}
+		job.Decode(msg.Data)
 
+		fmt.Println(job)
+
+		col := s.db.Collection("jobs")
+
+		_, err := col.InsertOne(context.TODO(), job)
+		fmt.Println(err)
+		fmt.Println("ahhh")
+		// store bson data?
 	})
 }
 
@@ -141,7 +147,11 @@ func (s *Server) GetWorkers() {
 	sub.Unsubscribe()
 }
 
-const uri = "mongodb://root:example@localhost:27017/"
+const (
+	uri        = "mongodb://root:example@localhost:27017/"
+	database   = "isitdown"
+	collection = "jobs"
+)
 
 func main() {
 	var err error
@@ -149,8 +159,7 @@ func main() {
 	server := Server{}
 	server.WorkersAvailable = false
 
-	go server.RunWebServer()
-
+	// Connect to NATS
 	server.nc, err = nats.Connect(NATS_SERVER,
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			log.Printf("client disconnected: %v", err)
@@ -165,46 +174,31 @@ func main() {
 			fmt.Println("new connection")
 		}),
 	)
-
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	go server.GetWorkers()
-	go server.SendJobs()
+	// Connet to Mongo
+	mongoOpts := options.Client().ApplyURI(uri).SetServerAPIOptions(
+		options.ServerAPI(options.ServerAPIVersion1),
+	)
+	server.mg, err = mongo.Connect(context.TODO(), mongoOpts)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// Use the SetServerAPIOptions() method to set the Stable API version to 1
-	/*
-		serverAPI := options.ServerAPI(options.ServerAPIVersion1)
-		opts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPI)
-		// Create a new client and connect to the server
-		client, err := mongo.Connect(context.TODO(), opts)
-		if err != nil {
-			panic(err)
-		}
-		defer func() {
-			if err = client.Disconnect(context.TODO()); err != nil {
-				panic(err)
-			}
-		}()
-		// Send a ping to confirm a successful connection
-
-		db := client.Database("test")
-
-		type Test struct {
-			CreatedAt time.Time `bson:"time"`
-		}
-		test := Test{CreatedAt: time.Now().UTC()}
-
-		res, err := db.Collection("test").InsertOne(context.Background(), test)
-		if err != nil {
+	defer func() {
+		if err = server.mg.Disconnect(context.TODO()); err != nil {
 			log.Fatal(err)
 		}
+	}()
 
-		bson.Marshal()
-		fmt.Println("Pinged your deployment. You successfully connected to MongoDB!")
-		log.Printf("%v documents inserted", res.InsertedID)
-	*/
+	server.db = server.mg.Database(database)
+
+	go server.RunWebServer()
+	go server.GetWorkers()
+	go server.SendJobs()
+	go server.CollectJobs()
 
 	select {}
 }
