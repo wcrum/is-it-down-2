@@ -13,15 +13,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"github.com/nats-io/nats.go"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -39,14 +43,81 @@ type Server struct {
 	WorkersAvailable bool
 }
 
+func (s *Server) GetLatencyForSite(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+
+	url := params["site"]
+
+	filter_arg := ""
+
+	switch url {
+	case "google":
+		filter_arg = "https://www.google.com"
+	case "insta":
+		filter_arg = "https://www.instagram.com"
+	}
+
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	w.Header().Set("Access-Control-Expose-Headers", "Authorization")
+
+	filter := bson.D{
+		{
+			Key: "args", Value: bson.A{
+				filter_arg,
+			},
+		},
+	}
+
+	sort := bson.D{{"CompletedAt", 1}}
+	opts := options.Find().SetSort(sort)
+	// Retrieves documents that match the filter and prints them as structs
+	coll := s.db.Collection("mock_jobs")
+	cursor, err := coll.Find(context.TODO(), filter, opts)
+	if err != nil {
+		panic(err)
+	}
+
+	var results []job.Job
+	if err = cursor.All(context.TODO(), &results); err != nil {
+		panic(err)
+	}
+
+	type response struct {
+		Time  int64 `json:"x"`
+		Value int   `json:"y"`
+	}
+
+	resp := []response{}
+	for _, result := range results {
+		i, _ := strconv.Atoi(result.Response)
+
+		unix := result.CompletedAt.UnixMilli()
+		resp = append(resp, response{Time: unix, Value: int(i)})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+
+	// get site
+	// return data
+
+}
+
 func (s *Server) RunWebServer() {
+	r := mux.NewRouter()
+	// func(http.ResponseWriter, *http.Request)
+	r.HandleFunc("/latency/{site}", s.GetLatencyForSite)
 
-	http.HandleFunc("GET /test", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "asd")
-	})
-	http.HandleFunc("POST /test", func(w http.ResponseWriter, r *http.Request) {})
+	srv := &http.Server{
+		Handler: r,
+		Addr:    ":8080",
+		// Good practice: enforce timeouts for servers you create!
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
 
-	http.ListenAndServe(":8080", nil)
+	srv.ListenAndServe()
 }
 
 func (s *Server) SendJobs() {
@@ -95,7 +166,6 @@ func (s *Server) CollectJobs() {
 
 		_, err := col.InsertOne(context.TODO(), job)
 		fmt.Println(err)
-		fmt.Println("ahhh")
 		// store bson data?
 	})
 }
